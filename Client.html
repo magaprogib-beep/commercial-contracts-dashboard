@@ -1,0 +1,1000 @@
+<script>
+(function(){
+  "use strict";
+
+  var REFRESH_INTERVAL_MS = 60000;
+  var state = {
+    data:null,
+    registry:{signed:[],pipeline:[],subsidy:[]},
+    loading:false,
+    lastVersion:null,
+    lastRequestAt:0,
+    currentView:"pulse",
+    scope:"signed",
+    quick:"",
+    special:"",
+    sortKey:"balance",
+    sortDir:-1,
+    progressMode:"receipts",
+    contractingFaceOn:false
+  };
+
+  function byId(id){return document.getElementById(id)}
+  function all(selector){return Array.prototype.slice.call(document.querySelectorAll(selector))}
+  function esc(value){return String(value==null?"":value).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]})}
+  function num(value){var n=Number(value);return Number.isFinite(n)?n:0}
+  function sum(values){return values.reduce(function(total,value){return total+num(value)},0)}
+  function fmtM(value,digits){var d=typeof digits==="number"?digits:1;return (num(value)/1000000).toLocaleString("ru-RU",{minimumFractionDigits:d,maximumFractionDigits:d})+" млн ₽"}
+  function money(value){return value==null?"—":num(value).toLocaleString("ru-RU",{maximumFractionDigits:0})+" ₽"}
+  function pct(value,digits){var d=typeof digits==="number"?digits:2;return (num(value)*100).toLocaleString("ru-RU",{minimumFractionDigits:d,maximumFractionDigits:d})+"%"}
+  function decimal(value,digits){var d=typeof digits==="number"?digits:1;return num(value).toLocaleString("ru-RU",{minimumFractionDigits:d,maximumFractionDigits:d})}
+  function setText(id,value){var el=byId(id);if(el)el.textContent=value}
+  function cumulative(values){var total=0;return values.map(function(value){total+=num(value);return total})}
+
+  function initTheme(){
+    var root=document.documentElement;
+    var buttons=all("[data-theme-option]");
+    function normalise(theme){return theme==="dark"||theme==="light"||theme==="corporate"?theme:"corporate"}
+    function apply(theme,persist){
+      theme=normalise(theme);
+      root.setAttribute("data-theme",theme);
+      root.style.colorScheme=theme==="dark"?"dark":"light";
+      buttons.forEach(function(button){
+        var active=button.getAttribute("data-theme-option")===theme;
+        button.classList.toggle("active",active);
+        button.setAttribute("aria-pressed",active?"true":"false");
+      });
+      if(persist){try{localStorage.setItem("commercial-dashboard-theme",theme)}catch(e){}}
+    }
+    apply(root.getAttribute("data-theme"),false);
+    buttons.forEach(function(button){button.addEventListener("click",function(){apply(button.getAttribute("data-theme-option"),true)})});
+  }
+
+  function setLiveStatus(message,type){
+    var el=byId("liveStatus");
+    if(!el)return;
+    el.textContent=message;
+    el.classList.remove("success","error");
+    if(type)el.classList.add(type);
+  }
+
+  function showDataError(message){
+    var el=byId("dataError");
+    if(!el)return;
+    if(message){el.textContent=message;el.classList.add("show")}else{el.textContent="";el.classList.remove("show")}
+  }
+
+  function refreshDashboard(force){
+    if(state.loading)return;
+    state.loading=true;
+    state.lastRequestAt=Date.now();
+    var button=byId("refreshDashboard");
+    if(button){button.disabled=true;button.textContent="Обновляю…"}
+    setLiveStatus("Получаю данные…","");
+    showDataError("");
+
+    google.script.run
+      .withSuccessHandler(function(data){
+        state.loading=false;
+        if(button){button.disabled=false;button.textContent="Обновить"}
+        if(!data){handleLoadError({message:"Сервер вернул пустой ответ."});return}
+        var changed=force||!state.data||state.lastVersion!==data.version;
+        state.data=data;
+        state.registry=data.registry||{signed:[],pipeline:[],subsidy:[]};
+        state.lastVersion=data.version||null;
+        if(changed)renderAll();
+        else updateTimestamps();
+        setLiveStatus("Актуально · "+data.updatedAt,"success");
+      })
+      .withFailureHandler(handleLoadError)
+      .getDashboardData();
+  }
+
+  function handleLoadError(error){
+    state.loading=false;
+    var button=byId("refreshDashboard");
+    if(button){button.disabled=false;button.textContent="Повторить"}
+    var message=error&&error.message?error.message:String(error||"Неизвестная ошибка");
+    setLiveStatus("Ошибка обновления","error");
+    showDataError("Не удалось получить данные из Google Таблицы: "+message);
+  }
+
+  function renderAll(){
+    renderPulse();
+    renderResults();
+    renderContractCounters();
+    renderDataQuality();
+    renderManagementFocus();
+    renderServiceMeta();
+    if(state.currentView==="contracts")renderRegistry();
+    updateTimestamps();
+  }
+
+  function updateTimestamps(){
+    if(!state.data)return;
+    var text="Источник: "+state.data.spreadsheetName+" · рассчитано "+state.data.updatedAt;
+    ["pulseUpdatedAt","resultsUpdatedAt","contractsUpdatedAt"].forEach(function(id){setText(id,text)});
+    setText("freshnessRibbon","Актуально · "+state.data.updatedAt);
+  }
+
+  function renderPulse(){
+    var data=state.data;
+    var receipts=data.receipts;
+    var contracting=data.contracting;
+    var total=data.overallKpi.total;
+    var receiptContribution=receipts.attainment*.8;
+    var contractContribution=contracting.attainment*.2;
+    var receiptShare=total?receiptContribution/total*100:0;
+    var contractShare=total?contractContribution/total*100:0;
+
+    setText("pulseOverallKpi",pct(total,2));
+    setText("pulseReceiptContribution",pct(receiptContribution,2));
+    setText("pulseContractContribution",pct(contractContribution,2));
+    byId("pulseReceiptContributionBar").style.width=Math.max(0,Math.min(100,receiptShare))+"%";
+    byId("pulseContractContributionBar").style.width=Math.max(0,Math.min(100,contractShare))+"%";
+    setText("pulseFormula",pct(receipts.attainment,2)+" × 80% + "+pct(contracting.attainment,2)+" × 20% = "+pct(total,2));
+
+    setText("pulseReceiptsValue",fmtM(receipts.actualTotal,2));
+    setText("pulseReceiptsAttainment",pct(receipts.attainment,2)+" годового плана");
+    setText("pulseContractingValue",fmtM(contracting.actualTotal,2));
+    setText("pulseContractingAttainment",pct(contracting.attainment,2)+" годового плана");
+
+    var portfolio=data.portfolio;
+    setText("pulsePortfolioValue",fmtM(portfolio.signedAgg.value,2));
+    setText("pulsePortfolioCount",portfolio.signedAgg.count+" подписанных договоров");
+    setText("portfolioPositions",(portfolio.signedAgg.count+portfolio.pipelineAgg.count)+" позиций");
+
+    var work=portfolio.statusGroups["В работе"]||emptyAggregate();
+    setText("statusWorkCount",work.count);
+    setText("statusWorkValue",fmtM(work.value,1));
+    setText("statusOppCount",portfolio.pipelineAgg.count);
+    setText("statusOppValue",fmtM(portfolio.pipelineAgg.value,1));
+    renderStatusCards();
+    renderCashflow("cashflowPulse");
+  }
+
+  function emptyAggregate(){return {count:0,value:0,paid:0,balance:0,types:{"ТС":0,"ПОДД":0,"Другие":0}}}
+
+  function renderStatusCards(){
+    var portfolio=state.data.portfolio;
+    var definitions=[
+      ["В работе","status-work"],["Ожидание ИД","status-wait"],["На закрытии","status-closing"],
+      ["Закрыты","status-closed"],["Расторгнут","status-risk"],["Приостановлен","status-paused"]
+    ];
+    var html=definitions.map(function(def){
+      var group=portfolio.statusGroups[def[0]]||emptyAggregate();
+      var types=group.types||{"ТС":0,"ПОДД":0,"Другие":0};
+      return '<button class="status-card '+def[1]+'" data-status-jump="'+esc(def[0])+'" type="button">'+
+        '<span class="status-name"><i></i>'+esc(def[0])+'</span><strong>'+group.count+'</strong>'+
+        '<span class="status-money">'+fmtM(group.value,1)+'</span>'+
+        '<span class="status-breakdown">ТС '+num(types["ТС"])+' · ПОДД '+num(types["ПОДД"])+' · Другие '+num(types["Другие"])+'</span></button>';
+    }).join("");
+    var ptypes=portfolio.pipelineTypes||{"ТС":0,"ПОДД":0,"Другие":0};
+    html+='<button class="status-card status-opp" data-status-jump="Планируется к контрактации" type="button">'+
+      '<span class="status-name"><i></i>Планируется к контрактации</span><strong>'+portfolio.pipelineAgg.count+'</strong>'+
+      '<span class="status-money">'+fmtM(portfolio.pipelineAgg.value,1)+'</span>'+
+      '<span class="status-breakdown">ТС '+num(ptypes["ТС"])+' · ПОДД '+num(ptypes["ПОДД"])+' · Другие '+num(ptypes["Другие"])+'</span></button>';
+    byId("statusList").innerHTML=html;
+  }
+
+  function renderResults(){
+    var data=state.data;
+    var receipts=data.receipts;
+    var contracting=data.contracting;
+    var r2025=receipts.receipts2025||{adjustedTotal:0,annualPlan:0,transferTo2026:0};
+
+    setText("summaryReceipts2025",fmtM(r2025.adjustedTotal,2));
+    setText("summaryReceipts2025Meta",pct(r2025.annualPlan?r2025.adjustedTotal/r2025.annualPlan:0,0)+" плана · после переноса "+fmtM(r2025.transferTo2026,2));
+    setText("summaryReceipts2026",fmtM(receipts.actualTotal,2));
+    setText("summaryReceipts2026Meta",pct(receipts.attainment,2)+" плана");
+    setText("summaryContracting2025",fmtM(contracting.total2025,2));
+    setText("summaryContracting2026",fmtM(contracting.actualTotal,2));
+    setText("summaryContracting2026Meta",pct(contracting.attainment,2)+" плана");
+    setText("summaryOverallKpi",pct(data.overallKpi.total,2));
+
+    renderCashflow("cashflowResults");
+    renderKpiMatrix();
+
+    setText("resultsReceiptsAttainment",pct(receipts.attainment,2));
+    setText("resultsReceiptsValue",fmtM(receipts.actualTotal,2));
+    setText("resultsReceiptsGoal","Управленческая цель года: "+fmtM(receipts.planTotal,1));
+    renderComparisonChart("receiptsCompare",receipts.quarters,receipts.planQuarters,"receipts");
+
+    setText("resultsContractingAttainment",pct(contracting.attainment,2));
+    setText("resultsContractingValue",fmtM(contracting.actualTotal,2));
+    setText("resultsContractingGoal","Годовой план: "+fmtM(contracting.planTotal,1));
+    renderComparisonChart("contractingCompare",contracting.quarters,contracting.planQuarters,"contracting");
+    renderAnnualProgress();
+  }
+
+  function renderCashflow(svgId){
+    var data=state.data;
+    var receipts=data.receipts;
+    var r2025=receipts.receipts2025||{};
+    var facts2025=(r2025.adjustedQuarters||[0,0,0,0]).slice(0,4);
+    var facts2026=(receipts.quarters||[0,0,0,0]).slice(0,4);
+    var forecasts2026=(receipts.forecastQuarters||[0,0,0,0]).slice(0,4);
+    var facts=facts2025.concat(facts2026);
+    var forecasts=[0,0,0,0].concat(forecasts2026);
+    var expected=facts.map(function(value,index){return num(value)+num(forecasts[index])});
+    var labels=["1 кв.","2 кв.","3 кв.","4 кв.","1 кв.","2 кв.","3 кв.","4 кв."];
+    var years=[2025,2025,2025,2025,2026,2026,2026,2026];
+    var currentIndex=4+Math.max(0,Math.min(3,num(receipts.currentQuarter||4)-1));
+
+    var left=54,right=744,top=28,bottom=238;
+    var plotW=right-left,plotH=bottom-top,slot=plotW/8,barW=Math.min(50,slot*.58);
+    var max=Math.max.apply(null,expected.concat([1]))*1.22;
+    function y(value){return bottom-num(value)/max*plotH}
+
+    var out="";
+    [0,.25,.5,.75,1].forEach(function(t){
+      var yy=bottom-plotH*t;
+      out+='<line x1="'+left+'" y1="'+yy.toFixed(1)+'" x2="'+right+'" y2="'+yy.toFixed(1)+'" class="gridline"/>'+
+        '<text x="8" y="'+(yy+4).toFixed(1)+'" class="axis-label">'+Math.round(max*t/1000000)+'</text>';
+    });
+
+    var sep=left+slot*4;
+    out+='<line x1="'+sep.toFixed(1)+'" y1="'+top+'" x2="'+sep.toFixed(1)+'" y2="'+(bottom+12)+'" class="year-sep"/>';
+
+    var currentBandX=left+slot*currentIndex;
+    out+='<rect x="'+currentBandX.toFixed(1)+'" y="20" width="'+slot.toFixed(1)+'" height="226" rx="11" class="current-quarter-band"/>'+
+      '<text x="'+(currentBandX+slot/2).toFixed(1)+'" y="15" text-anchor="middle" class="current-quarter-label">текущий квартал</text>';
+
+    facts.forEach(function(fact,index){
+      var forecast=forecasts[index];
+      var total=num(fact)+num(forecast);
+      var cx=left+slot*(index+.5);
+      var x=cx-barW/2;
+      var factH=num(fact)/max*plotH;
+      var foreH=num(forecast)/max*plotH;
+      var factY=bottom-factH;
+
+      if(num(fact)>0){
+        out+='<rect x="'+x.toFixed(1)+'" y="'+factY.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(factH,1).toFixed(1)+'" rx="6" class="bar-fact"><title>'+labels[index]+' '+years[index]+' — факт '+fmtM(fact,2)+'</title></rect>';
+      }else if(index===currentIndex){
+        out+='<rect x="'+x.toFixed(1)+'" y="'+(bottom-3).toFixed(1)+'" width="'+barW.toFixed(1)+'" height="3" rx="2" class="bar-fact current-zero-fact"><title>'+labels[index]+' '+years[index]+' — факт 0,00 млн ₽</title></rect>';
+      }
+
+      if(num(forecast)>0){
+        var forecastBottom=bottom-(num(fact)>0?factH:3);
+        var foreY=forecastBottom-foreH;
+        out+='<rect x="'+x.toFixed(1)+'" y="'+foreY.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(foreH,1).toFixed(1)+'" rx="6" class="bar-forecast"><title>'+labels[index]+' '+years[index]+' — факт '+fmtM(fact,2)+'; прогноз '+fmtM(forecast,2)+'; ожидаемо '+fmtM(total,2)+'</title></rect>';
+      }
+
+      var factLabelY=num(fact)>0?Math.max(factY-8,16):bottom-8;
+      out+='<text x="'+cx.toFixed(1)+'" y="'+factLabelY.toFixed(1)+'" text-anchor="middle" class="fact-value">'+decimal(num(fact)/1000000,1)+'</text>';
+
+      if(num(forecast)>0){
+        var forecastBottom2=bottom-(num(fact)>0?factH:3);
+        var foreY2=forecastBottom2-foreH;
+        var forecastY=foreH>28?foreY2+Math.min(foreH/2+4,foreH-7):Math.max(foreY2-5,12);
+        var totalY=Math.max(foreY2-26,12);
+        out+='<text x="'+cx.toFixed(1)+'" y="'+forecastY.toFixed(1)+'" text-anchor="middle" class="forecast-value">+'+decimal(num(forecast)/1000000,1)+'</text>'+
+          '<text x="'+cx.toFixed(1)+'" y="'+totalY.toFixed(1)+'" text-anchor="middle" class="total-value">итого '+decimal(total/1000000,1)+'</text>';
+      }
+
+      out+='<text x="'+cx.toFixed(1)+'" y="262" text-anchor="middle" class="quarter-label">'+labels[index]+'</text>';
+    });
+
+    var trendValues=facts.slice();
+    trendValues[currentIndex]=expected[currentIndex];
+    var n=trendValues.length,sx=0,sy=0,sxx=0,sxy=0;
+    trendValues.forEach(function(value,index){
+      var v=num(value)/1000000;
+      sx+=index;sy+=v;sxx+=index*index;sxy+=index*v;
+    });
+    var denominator=n*sxx-sx*sx;
+    var slope=denominator?(n*sxy-sx*sy)/denominator:0;
+    var intercept=(sy-slope*sx)/n;
+    var points=trendValues.map(function(value,index){
+      return [left+slot*(index+.5),y((intercept+slope*index)*1000000)];
+    });
+    out+='<path d="M '+points.map(function(point){return point[0].toFixed(1)+','+point[1].toFixed(1)}).join(' L ')+'" class="trend-line"/>';
+
+    out+='<text x="'+(left+slot*2).toFixed(1)+'" y="287" text-anchor="middle" class="year-label">2025</text>'+
+      '<text x="'+(left+slot*6).toFixed(1)+'" y="287" text-anchor="middle" class="year-label">2026</text>';
+
+    byId(svgId).innerHTML=out;
+  }
+
+  function renderKpiMatrix(){
+    var receipts=state.data.receipts,contracting=state.data.contracting,overall=state.data.overallKpi;
+    var quarterNames=["1 кв.","2 кв.","3 кв.","4 кв."];
+    var receiptAtt=receipts.quarters.map(function(value,index){return receipts.planQuarters[index]?num(value)/num(receipts.planQuarters[index]):0});
+    var contractAtt=contracting.quarters.map(function(value,index){return contracting.planQuarters[index]?num(value)/num(contracting.planQuarters[index]):0});
+    var html='<div class="matrix-head"></div>'+quarterNames.map(function(q){return '<div class="matrix-head">'+q+'</div>'}).join("");
+    html+='<div class="matrix-label">Приход</div>';
+    receiptAtt.forEach(function(value,index){html+=matrixCell(value,receipts.quarters[index],receipts.planQuarters[index],"m-acid","fact")});
+    html+='<div class="matrix-label">Контрактация</div>';
+    contractAtt.forEach(function(value,index){html+=matrixCell(value,contracting.quarters[index],contracting.planQuarters[index],"m-violet","fact")});
+    html+='<div class="matrix-label">Сводный KPI</div>';
+    overall.quarters.forEach(function(value,index){
+      if(!num(receipts.quarters[index])&&!num(contracting.quarters[index])){
+        html+='<div class="matrix-cell future m-cyan"><b>—</b><span>ещё нет факта</span><small class="matrix-base">рассчитается по факту</small></div>';
+      }else{
+        var rc=receiptAtt[index]*.8*100,cc=contractAtt[index]*.2*100;
+        html+='<div class="matrix-cell m-cyan"><b>'+pct(value,1)+'</b><span>'+(value>=1?'выше цели':'ниже цели')+'</span><small class="matrix-base">'+decimal(rc,1)+' + '+decimal(cc,1)+' п.п.<br>приход + контрактация</small></div>';
+      }
+    });
+    byId("kpiMatrix").innerHTML=html;
+  }
+
+  function matrixCell(attainment,fact,plan,cssClass){
+    if(!num(fact))return '<div class="matrix-cell future '+cssClass+'"><b>—</b><span>ещё нет факта</span><small class="matrix-base">план '+fmtM(plan,2)+'</small></div>';
+    return '<div class="matrix-cell '+cssClass+'"><b>'+pct(attainment,1)+'</b><span>'+(attainment>=1?'выше цели':'ниже цели')+'</span><small class="matrix-base">'+fmtM(fact,2).replace(' млн ₽','')+' / '+fmtM(plan,2)+'<br>факт / план</small></div>';
+  }
+
+  function renderComparisonChart(containerId,facts,plans,kind){
+    var left=42,right=682,top=22,bottom=190,plotW=right-left,plotH=bottom-top,group=plotW/4,barW=26;
+    var max=Math.max.apply(null,facts.concat(plans).concat([1]))*1.16;
+    function y(value){return bottom-num(value)/max*plotH}
+    var out='<svg class="compare-svg" viewBox="0 0 700 250" role="img" aria-label="'+(kind==="receipts"?'Приход':'Контрактация')+' 2026: план и факт по кварталам">';
+    [0,.25,.5,.75,1].forEach(function(t){var yy=bottom-plotH*t;out+='<line x1="'+left+'" y1="'+yy.toFixed(1)+'" x2="'+right+'" y2="'+yy.toFixed(1)+'" class="gridline"/><text x="3" y="'+(yy+4).toFixed(1)+'" class="axis-label">'+Math.round(max*t/1000000)+'</text>'});
+    for(var i=0;i<4;i++){
+      var cx=left+group*(i+.5),px=cx-31,fx=cx+5,py=y(plans[i]),fy=y(facts[i]),ph=bottom-py,fh=bottom-fy;
+      out+='<rect x="'+px.toFixed(1)+'" y="'+py.toFixed(1)+'" width="'+barW+'" height="'+Math.max(ph,1).toFixed(1)+'" rx="5" class="bar-plan"/>'+
+        '<rect x="'+fx.toFixed(1)+'" y="'+(num(facts[i])?fy:bottom-1).toFixed(1)+'" width="'+barW+'" height="'+(num(facts[i])?Math.max(fh,1):1).toFixed(1)+'" rx="5" class="'+(kind==="receipts"?'bar-fact':'bar-contract-fact')+'"/>'+
+        '<text x="'+(px+barW/2).toFixed(1)+'" y="'+Math.max(py-6,12).toFixed(1)+'" text-anchor="middle" class="compare-plan-label">'+decimal(num(plans[i])/1000000,1)+'</text>'+
+        '<text x="'+(fx+barW/2).toFixed(1)+'" y="'+Math.max(fy-6,12).toFixed(1)+'" text-anchor="middle" class="compare-fact-label">'+decimal(num(facts[i])/1000000,1)+'</text>'+
+        '<text x="'+cx.toFixed(1)+'" y="216" text-anchor="middle" class="quarter-label">'+(i+1)+' кв.</text>';
+    }
+    out+='</svg>';
+    byId(containerId).innerHTML=out;
+  }
+
+  function renderAnnualProgress(){
+    var receipts=state.data.receipts;
+    var contracting=state.data.contracting;
+
+    /*
+     * Накопительный приход считается одинаково для всех кварталов:
+     * только по фактическим зелёным суммам. Прогноз M143 здесь
+     * намеренно не используется.
+     */
+    var receiptQuarterValues=(receipts.quarters||[0,0,0,0]).map(num);
+    var receiptCum=cumulative(receiptQuarterValues);
+    var receiptPlanCum=cumulative(receipts.planQuarters||[0,0,0,0]);
+
+    var contractCum=cumulative(contracting.quarters||[0,0,0,0]);
+    var contractPlanCum=cumulative(contracting.planQuarters||[0,0,0,0]);
+
+    var q4Fact=receiptQuarterValues[3]||0;
+    var receiptNote='4 квартал идёт: накопительный результат включает только фактические зелёные суммы. Факт 4 квартала — '+fmtM(q4Fact,2)+'.';
+    var contractNote='Контрактация отображается накопительным фактическим итогом; прогнозных значений здесь нет.';
+
+    byId("annualProgressStage").innerHTML=
+      makeProgressPanel("annualProgressReceipts","receipts",receiptCum,receiptPlanCum,receiptNote)+
+      makeProgressPanel("annualProgressContracting","contracting",contractCum,contractPlanCum,contractNote);
+
+    bindProgressPanels();
+    setProgressMode(state.progressMode,false);
+  }
+
+  function makeProgressPanel(id,mode,values,plans,note){
+    var maxValue=Math.max.apply(null,values.concat(plans).concat([50]));
+    var yMax=Math.max(mode==="contracting"?100:80,Math.ceil(maxValue*1.12/10)*10);
+    var ticks=[0,yMax*.25,yMax*.5,yMax*.75,yMax];
+    var left=78,right=968,top=34,bottom=310,plotH=bottom-top,xs=[78,375,672,968];
+    function y(v){return bottom-num(v)/yMax*plotH}
+    var points=values.map(function(v,i){return [xs[i],y(v)]});
+    var line=smoothPath(points),area=line+' L '+points[3][0].toFixed(1)+','+bottom+' L '+points[0][0].toFixed(1)+','+bottom+' Z';
+    var planY=y(plans[3]);
+    var grid=ticks.map(function(t){var yy=y(t);return '<line x1="'+left+'" y1="'+yy.toFixed(1)+'" x2="'+right+'" y2="'+yy.toFixed(1)+'" class="annual-progress-grid"/><text x="13" y="'+(yy+5).toFixed(1)+'" class="annual-progress-axis">'+decimal(t,1)+'</text>'}).join("");
+    var circles=points.map(function(p,i){
+      var face=mode==="contracting"?'<image class="annual-progress-easter" href="'+esc((window.DASHBOARD_ASSETS||{}).face||"")+'" x="'+(p[0]-17).toFixed(1)+'" y="'+(p[1]-17).toFixed(1)+'" width="34" height="34" preserveAspectRatio="xMidYMid meet"></image>':'';
+      return '<circle class="annual-progress-point" cx="'+p[0].toFixed(1)+'" cy="'+p[1].toFixed(1)+'" r="5"><title>'+(i+1)+' кв. — '+fmtM(values[i],1)+' накопительно</title></circle>'+face;
+    }).join("");
+    var bounds=[left,(xs[0]+xs[1])/2,(xs[1]+xs[2])/2,(xs[2]+xs[3])/2,right];
+    var zones=[0,1,2,3].map(function(i){return '<rect class="annual-hover-zone" data-quarter="'+i+'" x="'+bounds[i].toFixed(1)+'" y="'+top+'" width="'+(bounds[i+1]-bounds[i]).toFixed(1)+'" height="'+(bottom-top).toFixed(1)+'"></rect>'}).join("");
+    var quarters=xs.map(function(x,i){return '<text x="'+x+'" y="346" text-anchor="middle" class="annual-progress-quarter">'+(i+1)+' кв.</text>'}).join("");
+    return '<div id="'+id+'" class="annual-progress-panel '+mode+(mode===state.progressMode?' active':'')+(mode==="contracting"&&state.contractingFaceOn?' easter-face-on':'')+'" data-progress-panel="'+mode+'" data-values="'+values.join(',')+'" data-plan="'+plans.join(',')+'">'+
+      '<div class="annual-progress-frame"><svg class="annual-progress-svg" viewBox="0 0 1040 400" role="img"><defs><linearGradient id="'+id+'Area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" class="annual-progress-area-start"></stop><stop offset="100%" class="annual-progress-area-end"></stop></linearGradient></defs><text x="13" y="22" class="annual-progress-unit">млн ₽</text>'+grid+
+      '<line x1="'+left+'" y1="'+planY.toFixed(1)+'" x2="'+right+'" y2="'+planY.toFixed(1)+'" class="annual-progress-plan-line"/><text x="'+(right-4)+'" y="'+(planY-10).toFixed(1)+'" text-anchor="end" class="annual-progress-plan-label">годовой план '+fmtM(plans[3],1)+'</text>'+
+      '<path d="'+area+'" fill="url(#'+id+'Area)" class="annual-progress-area"></path><path d="'+line+'" class="annual-progress-line"></path>'+circles+
+      '<line x1="'+xs[0]+'" y1="'+top+'" x2="'+xs[0]+'" y2="'+bottom+'" class="annual-progress-hover-line"></line>'+zones+quarters+'</svg>'+
+      '<div class="annual-progress-tooltip" aria-hidden="true"><div class="annual-progress-tooltip-quarter">1 кв.</div><div class="annual-progress-tooltip-row"><span>План</span><b>0,0 млн ₽</b></div><div class="annual-progress-tooltip-row"><span>Результат</span><b>0,0 млн ₽</b></div></div></div><div class="annual-progress-footnote">'+esc(note)+'</div></div>';
+  }
+
+  function smoothPath(points){
+    if(!points.length)return "";
+    var path='M '+points[0][0].toFixed(1)+','+points[0][1].toFixed(1);
+    for(var i=1;i<points.length;i++){
+      var p0=points[i-1],p1=points[i],dx=p1[0]-p0[0];
+      path+=' C '+(p0[0]+dx*.42).toFixed(1)+','+p0[1].toFixed(1)+' '+(p1[0]-dx*.42).toFixed(1)+','+p1[1].toFixed(1)+' '+p1[0].toFixed(1)+','+p1[1].toFixed(1);
+    }
+    return path;
+  }
+
+  function bindProgressPanels(){
+    all("[data-progress-panel]").forEach(function(panel){
+      var values=(panel.getAttribute("data-values")||"").split(",").map(Number),plans=(panel.getAttribute("data-plan")||"").split(",").map(Number);
+      var zones=allWithin(panel,".annual-hover-zone"),line=panel.querySelector(".annual-progress-hover-line"),tooltip=panel.querySelector(".annual-progress-tooltip"),quarterEl=panel.querySelector(".annual-progress-tooltip-quarter"),rows=panel.querySelectorAll(".annual-progress-tooltip-row b");
+      if(!line||!tooltip||rows.length<2)return;
+      function show(index,zone){
+        var svg=panel.querySelector(".annual-progress-svg"),frame=panel.querySelector(".annual-progress-frame"),points=panel.querySelectorAll(".annual-progress-point"),point=points[index];
+        if(!svg||!frame||!point)return;
+        var cx=parseFloat(point.getAttribute("cx")||"0");line.setAttribute("x1",cx);line.setAttribute("x2",cx);
+        quarterEl.textContent=(index+1)+" кв.";rows[0].textContent=fmtM(plans[index],1);rows[1].textContent=fmtM(values[index],1);panel.classList.add("hovering");
+        var svgWidth=svg.viewBox.baseVal.width||1040,scale=frame.clientWidth/svgWidth,px=cx*scale-frame.scrollLeft,tw=tooltip.offsetWidth||170;
+        tooltip.style.left=Math.max(tw/2+10,Math.min(px,frame.clientWidth-tw/2-10))+"px";
+      }
+      function hide(){panel.classList.remove("hovering")}
+      zones.forEach(function(zone,index){["mouseenter","mousemove","click"].forEach(function(event){zone.addEventListener(event,function(){show(index,zone)})});zone.addEventListener("mouseleave",hide);zone.addEventListener("touchstart",function(){show(index,zone)},{passive:true})});
+      var frame=panel.querySelector(".annual-progress-frame");if(frame)frame.addEventListener("mouseleave",hide);
+    });
+  }
+
+  function allWithin(root,selector){return Array.prototype.slice.call(root.querySelectorAll(selector))}
+
+  function setProgressMode(mode,persist){
+    state.progressMode=mode==="contracting"?"contracting":"receipts";
+    all("[data-progress-option]").forEach(function(button){var active=button.getAttribute("data-progress-option")===state.progressMode;button.classList.toggle("active",active);button.setAttribute("aria-pressed",active?"true":"false")});
+    all("[data-progress-panel]").forEach(function(panel){panel.classList.toggle("active",panel.getAttribute("data-progress-panel")===state.progressMode)});
+    if(persist){try{localStorage.setItem("annual-progress-mode",state.progressMode)}catch(e){}}
+  }
+
+
+  function renderServiceMeta(){
+    if(!state.data)return;
+    setText("sourceRibbon",state.data.spreadsheetName+" · онлайн");
+    setText("freshnessRibbon","Актуально · "+state.data.updatedAt);
+  }
+
+  function renderDataQuality(){
+    if(!state.data)return;
+    var quality=state.data.dataQuality||{summary:{total:0,critical:0,review:0},issues:[]};
+    var summary=quality.summary||{total:0,critical:0,review:0};
+    var issues=quality.issues||[];
+
+    setText("qualityButtonCount",summary.total);
+    setText("qualityCriticalCount",summary.critical);
+    setText("qualityReviewCount",summary.review);
+    setText("qualityTotalCount",summary.total);
+
+    var button=byId("qualityButton");
+    if(button)button.classList.toggle("clean",summary.total===0);
+
+    var ribbon=byId("qualityRibbon");
+    if(ribbon){
+      if(summary.total===0){
+        ribbon.textContent="Данные в порядке";
+        ribbon.classList.remove("warn");
+      }else{
+        ribbon.textContent=summary.critical+" требуют исправления · "+summary.review+" проверить";
+        ribbon.classList.add("warn");
+      }
+    }
+
+    var list=byId("qualityList");
+    if(!list)return;
+
+    if(!issues.length){
+      list.innerHTML='<div class="quality-empty"><b>Замечаний не найдено.</b><br>Автоматические проверки пройдены.</div>';
+      return;
+    }
+
+    list.innerHTML=issues.map(function(issue){
+      var severity=issue.severity==="critical"?"critical":"review";
+      var severityLabel=severity==="critical"?"Требует исправления":"Проверить";
+      var rowLabel=issue.row?"Строка "+issue.row:"Без номера строки";
+      return '<button class="quality-issue '+severity+'" type="button" data-issue-query="'+esc(issue.query||"")+'" data-issue-scope="'+esc(issue.scope||"signed")+'">'+
+        '<span class="quality-row">'+esc(rowLabel)+'</span>'+
+        '<span class="quality-severity">'+severityLabel+'</span>'+
+        '<strong>'+esc(issue.title||"Замечание")+'</strong>'+
+        '<small>'+esc(issue.description||"")+'</small>'+
+        '<em>Открыть договор →</em></button>';
+    }).join("");
+  }
+
+  function renderManagementFocus(){
+    if(!state.data)return;
+    var data=state.data;
+    var receipts=data.receipts||{};
+    var contracting=data.contracting||{};
+    var portfolio=data.portfolio||{};
+    var groups=portfolio.statusGroups||{};
+    var quality=(data.dataQuality||{}).summary||{};
+    var scenario=num(receipts.actualTotal)+num(receipts.currentQuarterForecast);
+    var scenarioRatio=num(receipts.planTotal)?scenario/num(receipts.planTotal):0;
+    var priorContracting=num(contracting.total2025);
+    var priorRatio=priorContracting?num(contracting.actualTotal)/priorContracting:0;
+    var pipeline=portfolio.pipelineAgg||{};
+
+    setText("focusReceiptsScenario",fmtM(scenario,2));
+    setText("focusReceiptsMeta",pct(scenarioRatio,1)+" годового плана · факт + прогноз 4 кв.");
+    setText("focusContracting",fmtM(contracting.actualTotal,2));
+    setText("focusContractingMeta",pct(contracting.attainment,1)+" плана · "+pct(priorRatio,1)+" результата 2025");
+    setText("focusPipeline",fmtM(pipeline.value,2));
+    setText("focusPipelineMeta",num(pipeline.count)+" потенциальных договоров");
+    setText("focusActiveCount",num((groups["В работе"]||{}).count));
+    setText("focusClosingCount",num((groups["На закрытии"]||{}).count));
+    setText("focusCriticalCount",num(quality.critical));
+
+    var excluded=["Выполнен и закрыт","Расторгнут","Расторжение","Отказ"];
+    var largest=(state.registry.signed||[]).filter(function(record){
+      return num(record.balance)>0&&excluded.indexOf(record.status)<0;
+    }).sort(function(first,second){
+      return num(second.balance)-num(first.balance);
+    }).slice(0,5);
+    var list=byId("focusBalances");
+    if(!list)return;
+    if(!largest.length){
+      list.innerHTML='<div class="empty">Активных договоров с остатком не найдено.</div>';
+      return;
+    }
+    list.innerHTML=largest.map(function(record){
+      return '<div class="focus-balance-row"><div><strong title="'+esc(record.subject||record.name)+'">'+esc(record.name)+'</strong><small>'+esc(record.counterparty||"Контрагент не указан")+' · '+esc(record.status||"Статус не указан")+'</small></div><b>'+money(record.balance)+'</b></div>';
+    }).join("");
+  }
+
+  function showToast(message){
+    var node=byId("conceptToast");
+    if(!node)return;
+    node.textContent=message;
+    node.classList.add("show");
+    window.clearTimeout(node._timer);
+    node._timer=window.setTimeout(function(){node.classList.remove("show")},1900);
+  }
+
+  function copyText(text,message){
+    if(navigator.clipboard&&window.isSecureContext){
+      navigator.clipboard.writeText(text).then(function(){showToast(message)}).catch(function(){fallbackCopy(text,message)});
+      return;
+    }
+    fallbackCopy(text,message);
+  }
+
+  function fallbackCopy(text,message){
+    var area=document.createElement("textarea");
+    area.value=text;
+    area.style.position="fixed";
+    area.style.opacity="0";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+    showToast(message);
+  }
+
+  function openQualityDrawer(){
+    closeFocusDrawer();
+    byId("qualityOverlay").classList.add("open");
+    byId("qualityDrawer").classList.add("open");
+    byId("qualityOverlay").setAttribute("aria-hidden","false");
+    byId("qualityDrawer").setAttribute("aria-hidden","false");
+  }
+
+  function closeQualityDrawer(){
+    byId("qualityOverlay").classList.remove("open");
+    byId("qualityDrawer").classList.remove("open");
+    byId("qualityOverlay").setAttribute("aria-hidden","true");
+    byId("qualityDrawer").setAttribute("aria-hidden","true");
+  }
+
+  function openFocusDrawer(){
+    closeQualityDrawer();
+    renderManagementFocus();
+    byId("focusOverlay").classList.add("open");
+    byId("focusDrawer").classList.add("open");
+    byId("focusOverlay").setAttribute("aria-hidden","false");
+    byId("focusDrawer").setAttribute("aria-hidden","false");
+  }
+
+  function closeFocusDrawer(){
+    byId("focusOverlay").classList.remove("open");
+    byId("focusDrawer").classList.remove("open");
+    byId("focusOverlay").setAttribute("aria-hidden","true");
+    byId("focusDrawer").setAttribute("aria-hidden","true");
+  }
+
+  function togglePresentation(){
+    var active=!document.body.classList.contains("presentation-mode");
+    document.body.classList.toggle("presentation-mode",active);
+    byId("presentationButton").setAttribute("aria-pressed",active?"true":"false");
+    setText("presentationLabel",active?"Выйти из режима":"Режим доклада");
+    closeQualityDrawer();
+    closeFocusDrawer();
+    window.scrollTo(0,0);
+  }
+
+  function copyManagementFocus(){
+    if(!state.data)return;
+    var data=state.data;
+    var receipts=data.receipts||{};
+    var contracting=data.contracting||{};
+    var groups=(data.portfolio||{}).statusGroups||{};
+    var scenario=num(receipts.actualTotal)+num(receipts.currentQuarterForecast);
+    var excluded=["Выполнен и закрыт","Расторгнут","Расторжение","Отказ"];
+    var largest=(state.registry.signed||[]).filter(function(record){return num(record.balance)>0&&excluded.indexOf(record.status)<0}).sort(function(first,second){return num(second.balance)-num(first.balance)}).slice(0,5);
+    var lines=[
+      "Управленческий фокус · "+data.updatedAt,
+      "",
+      "Сценарий прихода 2026: "+fmtM(scenario,2),
+      "Контрактация 2026: "+fmtM(contracting.actualTotal,2)+" · "+pct(contracting.attainment,1)+" плана",
+      "Opportunities: "+fmtM((data.portfolio.pipelineAgg||{}).value,2)+" · "+num((data.portfolio.pipelineAgg||{}).count)+" позиций",
+      "В работе: "+num((groups["В работе"]||{}).count)+" · На закрытии: "+num((groups["На закрытии"]||{}).count),
+      "Критичные замечания: "+num(((data.dataQuality||{}).summary||{}).critical),
+      "",
+      "Крупнейшие остатки:"
+    ];
+    largest.forEach(function(record,index){lines.push((index+1)+". "+record.name+" — "+money(record.balance))});
+    copyText(lines.join("\n"),"Управленческий срез скопирован");
+  }
+
+  function openQualityIssue(button){
+    var scope=button.getAttribute("data-issue-scope")||"signed";
+    var query=button.getAttribute("data-issue-query")||"";
+    closeQualityDrawer();
+    switchView("contracts");
+    setScope(scope==="pipeline"?"pipeline":scope==="subsidy"?"subsidy":"signed");
+    byId("search").value=query;
+    byId("search").dispatchEvent(new Event("input",{bubbles:true}));
+  }
+
+  function activeFilterCount(){
+    var count=0;
+    if(state.scope!=="signed")count++;
+    if(state.special)count++;
+    if(state.quick)count++;
+    if(byId("search").value.trim())count++;
+    if(byId("typeFilter").value)count++;
+    if(byId("yearFilter").value)count++;
+    if(byId("statusFilter").value)count++;
+    if(byId("sortFilter").value!=="balance-desc")count++;
+    return count;
+  }
+
+  function updateActiveFilterCount(){
+    var count=activeFilterCount();
+    var node=byId("activeFilterCount");
+    if(!node)return;
+    node.textContent="Активных фильтров: "+count;
+    node.classList.toggle("has-filters",count>0);
+  }
+
+  function resetFilters(){
+    state.scope="signed";
+    state.quick="";
+    state.special="";
+    state.sortKey="balance";
+    state.sortDir=-1;
+
+    all("[data-scope]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-scope")==="signed")});
+    all("[data-special]").forEach(function(button){button.classList.remove("active")});
+    all("[data-quick]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-quick")==="")});
+
+    byId("search").value="";
+    byId("typeFilter").value="";
+    byId("yearFilter").value="";
+    byId("statusFilter").value="";
+    byId("sortFilter").value="balance-desc";
+
+    populateStatuses();
+    renderRegistry();
+    showToast("Фильтры сброшены");
+  }
+
+  function filterState(){
+    return {
+      scope:state.scope,
+      quick:state.quick,
+      special:state.special,
+      search:byId("search").value.trim(),
+      type:byId("typeFilter").value,
+      year:byId("yearFilter").value,
+      status:byId("statusFilter").value,
+      sort:byId("sortFilter").value
+    };
+  }
+
+  function copyFilterLink(){
+    var encoded=encodeURIComponent(JSON.stringify(filterState()));
+    google.script.run
+      .withSuccessHandler(function(baseUrl){
+        if(!baseUrl){showToast("Не удалось получить рабочую ссылку");return}
+        copyText(baseUrl+"?slice="+encoded,"Ссылка на срез скопирована");
+      })
+      .withFailureHandler(function(){showToast("Не удалось получить рабочую ссылку")})
+      .getDashboardBaseUrl();
+  }
+
+  function restoreFiltersFromLink(){
+    var raw=typeof window.__INITIAL_SLICE__==="string"?window.__INITIAL_SLICE__:"";
+    if(!raw){
+      var match=window.location.hash.match(/^#slice=(.+)$/);
+      raw=match?decodeURIComponent(match[1]):"";
+    }
+    if(!raw)return;
+    try{
+      var saved=JSON.parse(raw);
+      state.scope=["signed","pipeline","subsidy"].indexOf(saved.scope)>=0?saved.scope:"signed";
+      state.quick=typeof saved.quick==="string"?saved.quick:"";
+      state.special=["receipts2026","contracting2026"].indexOf(saved.special)>=0?saved.special:"";
+      all("[data-scope]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-scope")===state.scope)});
+      all("[data-special]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-special")===state.special)});
+      all("[data-quick]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-quick")===state.quick)});
+      populateStatuses();
+      byId("search").value=typeof saved.search==="string"?saved.search:"";
+      byId("typeFilter").value=saved.type||"";
+      byId("yearFilter").value=saved.year||"";
+      byId("statusFilter").value=saved.status||"";
+      byId("sortFilter").value=saved.sort||"balance-desc";
+      var parts=byId("sortFilter").value.split("-");
+      state.sortKey=parts[0];
+      state.sortDir=parts[1]==="asc"?1:-1;
+      switchView("contracts");
+      updateActiveFilterCount();
+    }catch(error){
+      showToast("Ссылка на срез повреждена");
+    }
+  }
+
+  function filterDescription(){
+    var parts=[];
+    if(state.special==="receipts2026")parts.push("Приход 2026");
+    else if(state.special==="contracting2026")parts.push("Контрактация 2026");
+    else if(state.scope==="pipeline")parts.push("Opportunities");
+    else if(state.scope==="subsidy")parts.push("Субсидии");
+    else parts.push("Подписанные");
+
+    var activeQuick=document.querySelector("[data-quick].active");
+    if(activeQuick&&state.quick)parts.push(activeQuick.textContent.trim());
+    if(byId("typeFilter").value)parts.push("Тип: "+byId("typeFilter").value);
+    if(byId("yearFilter").value)parts.push("Год: "+byId("yearFilter").value);
+    if(byId("statusFilter").value)parts.push("Статус: "+byId("statusFilter").selectedOptions[0].textContent);
+    if(byId("search").value.trim())parts.push('Поиск: "'+byId("search").value.trim()+'"');
+
+    return parts.join(" · ");
+  }
+
+  function copyCurrentSlice(){
+    var rows=filteredRows();
+    var text=[
+      "Срез договоров",
+      filterDescription(),
+      "",
+      "Позиций: "+rows.length,
+      "Стоимость G: "+fmtM(sum(rows.map(function(r){return r.value})),1),
+      "Остаток Q: "+fmtM(sum(rows.map(function(r){return r.balance})),1)
+    ].join("\n");
+    copyText(text,"Срез скопирован");
+  }
+
+  function copyBriefReport(){
+    if(!state.data)return;
+    var data=state.data;
+    var groups=data.portfolio.statusGroups||{};
+    var lines=[
+      "Коммерческие договоры · "+data.updatedAt,
+      "",
+      "Сводный KPI: "+pct(data.overallKpi.total,2),
+      "Приход 2026: "+fmtM(data.receipts.actualTotal,2)+" · "+pct(data.receipts.attainment,2)+" плана",
+      "Контрактация 2025: "+fmtM(data.contracting.total2025,2),
+      "Контрактация 2026: "+fmtM(data.contracting.actualTotal,2)+" · "+pct(data.contracting.attainment,2)+" плана",
+      "Подписанный портфель: "+data.portfolio.signedAgg.count+" договоров на "+fmtM(data.portfolio.signedAgg.value,2),
+      "В работе: "+num((groups["В работе"]||{}).count),
+      "На закрытии: "+num((groups["На закрытии"]||{}).count),
+      "Закрыты: "+num((groups["Закрыты"]||{}).count),
+      "Opportunities: "+data.portfolio.pipelineAgg.count+" на "+fmtM(data.portfolio.pipelineAgg.value,2),
+      "",
+      "Контроль данных: "+num((data.dataQuality||{summary:{}}).summary.total)+" замечаний"
+    ];
+    copyText(lines.join("\n"),"Краткий отчёт скопирован");
+  }
+
+  function copyQualityList(){
+    var issues=((state.data||{}).dataQuality||{}).issues||[];
+    var lines=["Контроль качества данных",""];
+    if(!issues.length){
+      lines.push("Замечаний не найдено.");
+    }else{
+      issues.forEach(function(issue){
+        lines.push((issue.row?"Строка "+issue.row:"Без номера строки")+" — "+(issue.title||"Замечание"));
+        lines.push(issue.description||"");
+        lines.push("");
+      });
+    }
+    copyText(lines.join("\n"),"Список замечаний скопирован");
+  }
+
+  function renderContractCounters(){
+    if(!state.data)return;
+    var signed=state.registry.signed||[],receiptsCount=signed.filter(function(r){return num(r.received2026)>0}).length,contractingCount=signed.filter(function(r){return num(r.contracting2026)>0}).length;
+    setText("scopeSigned","Подписанные · "+state.data.portfolio.signedAgg.count);
+    setText("scopePipeline","Opportunities · "+state.data.portfolio.pipelineAgg.count);
+    setText("scopeSubsidy","Субсидии · "+state.data.portfolio.subsidyAgg.count);
+    setText("specialReceipts","Приход 2026 · "+receiptsCount);
+    setText("specialContracting","Контрактация 2026 · "+contractingCount);
+  }
+
+  function workType(section){if(section==="Разработка ТС")return "ТС";if(section==="Разработка ПОДД")return "ПОДД";return "Прочее"}
+  function typeClass(type){if(type==="ТС")return "type-ts";if(type==="ПОДД")return "type-podd";return "type-other"}
+  function displayStatus(status){return ["Расторжение","Расторгнут","Отказ"].indexOf(status)>=0?"Расторгнут":status}
+  function statusClass(status){if(status==="Действует")return "b-active";if(status==="Ожидание ИД")return "b-wait";if(status==="Процесс закрытия")return "b-closing";if(status==="Выполнен и закрыт")return "b-closed";if(["Расторжение","Расторгнут","Приостановлен","Отказ"].indexOf(status)>=0)return "b-risk";if(status==="opportunities")return "b-opp";return "b-sub"}
+
+  function rowsForScope(){if(state.scope==="signed")return state.registry.signed||[];if(state.scope==="pipeline")return state.registry.pipeline||[];return state.registry.subsidy||[]}
+
+  function populateStatuses(){
+    var select=byId("statusFilter");
+    if(state.scope!=="signed"){select.innerHTML='<option value="">Все статусы</option>';return}
+    select.innerHTML='<option value="">Все статусы</option><option value="Действует">В работе</option><option value="Ожидание ИД">Ожидание ИД</option><option value="Процесс закрытия">Процесс закрытия</option><option value="Выполнен и закрыт">Выполнен и закрыт</option><option value="group:terminated">Расторгнут</option><option value="Приостановлен">Приостановлен</option>';
+  }
+
+  function filteredRows(){
+    var query=byId("search").value.trim().toLowerCase(),type=byId("typeFilter").value,year=byId("yearFilter").value,status=byId("statusFilter").value;
+    var rows=rowsForScope().filter(function(r){
+      if(type&&workType(r.section)!==type)return false;
+      if(year&&String(r.year)!==year)return false;
+      if(status){if(status==="group:terminated"){if(["Расторжение","Расторгнут","Отказ"].indexOf(r.status)<0)return false}else if(r.status!==status)return false}
+      if(state.scope==="signed"&&state.quick){if(state.quick==="group:terminated"){if(["Расторжение","Расторгнут","Отказ"].indexOf(r.status)<0)return false}else if(r.status!==state.quick)return false}
+      if(state.special==="receipts2026"&&!(num(r.received2026)>0))return false;
+      if(state.special==="contracting2026"&&!(num(r.contracting2026)>0))return false;
+      if(query){var hay=[r.name,r.contract,r.counterparty,r.status,r.subject].join(" ").toLowerCase();if(hay.indexOf(query)<0)return false}
+      return true;
+    });
+    rows.sort(function(a,b){
+      var av=a[state.sortKey],bv=b[state.sortKey];
+      if(["balance","value","paid","received2026","contracting2026"].indexOf(state.sortKey)>=0){av=av==null?-Infinity:num(av);bv=bv==null?-Infinity:num(bv);return (av-bv)*state.sortDir}
+      if(state.sortKey==="workType"){av=workType(a.section);bv=workType(b.section)}else{av=String(av||"");bv=String(bv||"")}
+      return av.localeCompare(bv,"ru")*state.sortDir;
+    });
+    return rows;
+  }
+
+  function renderRegistry(){
+    if(!state.data)return;
+    var rows=filteredRows();
+    setText("regCount",rows.length);setText("regValue",fmtM(sum(rows.map(function(r){return r.value})),1));setText("regBalance",fmtM(sum(rows.map(function(r){return r.balance})),1));
+    var context=byId("specialContext");
+    if(state.special==="receipts2026"){
+      var receiptsSum=sum(rows.map(function(r){return r.received2026}));
+      context.innerHTML='<b>Приход 2026:</b> '+rows.length+' договоров · '+fmtM(receiptsSum,1)+'. Показаны договоры с зелёными поступлениями M:P. Перенос '+fmtM(state.data.receipts.receipts2025.transferTo2026,2)+' из 2025 года не привязан к отдельному договору.';context.classList.add("show");
+    }else if(state.special==="contracting2026"){
+      var contractingSum=sum(rows.map(function(r){return r.contracting2026}));
+      context.innerHTML='<b>Контрактация 2026:</b> '+rows.length+' договоров · '+fmtM(contractingSum,1)+'. Срез соответствует фактическому списку листа «Контрактация/закрытие 2026».';context.classList.add("show");
+    }else{context.classList.remove("show");context.innerHTML=""}
+    updateContractsEaster();
+
+    var tbody=byId("registryBody");
+    if(!rows.length){tbody.innerHTML='<tr><td colspan="7" class="empty">Ничего не найдено.</td></tr>'}
+    else{
+      tbody.innerHTML=rows.map(function(r,index){
+        var date=r.date?new Date(r.date+"T00:00:00").toLocaleDateString("ru-RU"):"—",status=state.scope==="subsidy"?"Субсидия":displayStatus(r.status||"—");
+        var specialLine=state.special==="receipts2026"?'<span class="special-record-line">Приход 2026: '+money(r.received2026)+'</span>':state.special==="contracting2026"?'<span class="special-record-line">Контрактация 2026: '+money(r.contracting2026)+'</span>':'';
+        return '<tr data-row="'+index+'"><td><b>'+esc(r.name)+'</b><br><span style="color:var(--muted);font-size:10px">'+esc(r.contract||"№ не указан")+'</span>'+specialLine+'</td><td><span class="badge '+statusClass(status)+'">'+esc(status)+'</span></td><td><span class="type-badge '+typeClass(workType(r.section))+'">'+workType(r.section)+'</span></td><td>'+date+'</td><td class="money">'+money(r.value)+'</td><td class="money">'+money(r.paid)+'</td><td class="money">'+money(r.balance)+'</td></tr>';
+      }).join("");
+      allWithin(tbody,"tr[data-row]").forEach(function(row){row.addEventListener("click",function(){showDetail(rows[Number(row.getAttribute("data-row"))])})});
+    }
+
+    var cards=byId("registryCards");
+    if(!rows.length){cards.innerHTML='<div class="empty">Ничего не найдено.</div>'}
+    else{
+      cards.innerHTML=rows.map(function(r){
+        var date=r.date?new Date(r.date+"T00:00:00").toLocaleDateString("ru-RU"):"—",status=state.scope==="subsidy"?"Субсидия":displayStatus(r.status||"—");
+        var specialRow=state.special==="receipts2026"?'<div class="row"><span>Приход 2026</span><b>'+money(r.received2026)+'</b></div>':state.special==="contracting2026"?'<div class="row"><span>Контрактация 2026</span><b>'+money(r.contracting2026)+'</b></div>':'';
+        return '<article class="registry-card"><span class="badge '+statusClass(status)+'">'+esc(status)+'</span><h3>'+esc(r.name)+'</h3><div class="meta"><span class="type-badge '+typeClass(workType(r.section))+'">'+workType(r.section)+'</span> · '+esc(r.contract||"№ не указан")+' · '+date+'</div>'+specialRow+'<div class="row"><span>Стоимость G</span><b>'+money(r.value)+'</b></div><div class="row"><span>Поступило L</span><b>'+money(r.paid)+'</b></div><div class="row"><span>Остаток Q</span><b>'+money(r.balance)+'</b></div><details><summary>Подробнее</summary><div class="row"><span>Контрагент</span><b>'+esc(r.counterparty||"—")+'</b></div><div class="row"><span>Статус S</span><b>'+esc(status)+'</b></div></details></article>';
+      }).join("");
+    }
+
+    updateActiveFilterCount();
+  }
+
+  function showDetail(r){
+    var panel=byId("detailPanel"),date=r.date?new Date(r.date+"T00:00:00").toLocaleDateString("ru-RU"):"—",status=state.scope==="subsidy"?"Субсидия":displayStatus(r.status||"—");
+    panel.innerHTML='<span class="badge '+statusClass(status)+'">'+esc(status)+'</span><h3>'+esc(r.name)+'</h3><div class="detail-grid"><div><span>Стоимость G</span><b>'+money(r.value)+'</b></div><div><span>Поступило L</span><b>'+money(r.paid)+'</b></div><div><span>Остаток Q</span><b>'+money(r.balance)+'</b></div></div><p style="font-size:12px;color:var(--muted)">Тип работ: <b>'+workType(r.section)+'</b> · Договор: '+esc(r.contract||"—")+' · '+date+' · '+esc(r.counterparty||"—")+'</p>';
+    panel.classList.add("show");
+  }
+
+  function setScope(scope){
+    state.scope=scope;state.quick="";state.special="";
+    all("[data-scope]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-scope")===scope)});
+    all("[data-special]").forEach(function(button){button.classList.remove("active")});
+    all("[data-quick]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-quick")==="")});
+    populateStatuses();renderRegistry();
+  }
+
+  function setSpecial(special){
+    state.scope="signed";state.special=special;state.quick="";
+    all("[data-scope]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-scope")==="signed")});
+    all("[data-special]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-special")===special)});
+    all("[data-quick]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-quick")==="")});
+    ["search","typeFilter","yearFilter","statusFilter"].forEach(function(id){byId(id).value=""});
+    state.sortKey=special==="receipts2026"?"received2026":"contracting2026";state.sortDir=-1;
+    byId("sortFilter").value=special==="receipts2026"?"received2026-desc":"contracting2026-desc";
+    populateStatuses();renderRegistry();
+  }
+
+  function updateContractsEaster(){
+    var section=byId("view-contracts"),type=byId("typeFilter").value,status=byId("statusFilter").value;
+    var completed=state.quick==="Выполнен и закрыт"||status==="Выполнен и закрыт";
+    section.classList.toggle("easter-active",state.scope==="signed"&&type==="ПОДД"&&completed);
+  }
+
+  function switchView(view){
+    state.currentView=view;
+    all(".view").forEach(function(section){section.classList.toggle("active",section.id==="view-"+view)});
+    all("[data-view]").forEach(function(button){button.classList.toggle("active",button.getAttribute("data-view")===view)});
+    setText("viewTitle",view==="pulse"?"Pulse":view==="results"?"Результаты":"Договоры");
+    if(view==="contracts"){populateStatuses();renderRegistry();updateContractsEaster()}else{byId("view-contracts").classList.remove("easter-active")}
+    window.scrollTo(0,0);
+  }
+
+  function bindControls(){
+    byId("refreshDashboard").addEventListener("click",function(){refreshDashboard(true)});
+    byId("focusButton").addEventListener("click",openFocusDrawer);
+    byId("focusCloseButton").addEventListener("click",closeFocusDrawer);
+    byId("focusOverlay").addEventListener("click",closeFocusDrawer);
+    byId("qualityButton").addEventListener("click",openQualityDrawer);
+    byId("qualityCloseButton").addEventListener("click",closeQualityDrawer);
+    byId("qualityOverlay").addEventListener("click",closeQualityDrawer);
+    byId("copyReportButton").addEventListener("click",copyBriefReport);
+    byId("printButton").addEventListener("click",function(){window.print()});
+    byId("presentationButton").addEventListener("click",togglePresentation);
+    byId("copyFocusButton").addEventListener("click",copyManagementFocus);
+    byId("copyQualityButton").addEventListener("click",copyQualityList);
+    byId("copySliceButton").addEventListener("click",copyCurrentSlice);
+    byId("copyFilterLinkButton").addEventListener("click",copyFilterLink);
+    byId("resetFiltersButton").addEventListener("click",resetFilters);
+    byId("qualityList").addEventListener("click",function(event){
+      var button=event.target.closest(".quality-issue");
+      if(button)openQualityIssue(button);
+    });
+    all("[data-view]").forEach(function(button){button.addEventListener("click",function(){switchView(button.getAttribute("data-view"))})});
+    all("[data-kpi-special]").forEach(function(card){
+      function open(){switchView("contracts");setSpecial(card.getAttribute("data-kpi-special"))}
+      card.addEventListener("click",open);card.addEventListener("keydown",function(event){if(event.key==="Enter"||event.key===" "){event.preventDefault();open()}});
+    });
+    byId("statusList").addEventListener("click",function(event){
+      var button=event.target.closest("[data-status-jump]");if(!button)return;
+      var group=button.getAttribute("data-status-jump");switchView("contracts");
+      if(group==="Планируется к контрактации"){setScope("pipeline");return}
+      setScope("signed");
+      var map={"В работе":"Действует","Ожидание ИД":"Ожидание ИД","На закрытии":"Процесс закрытия","Закрыты":"Выполнен и закрыт","Расторгнут":"group:terminated","Приостановлен":"Приостановлен"};
+      state.quick=map[group]||"";all("[data-quick]").forEach(function(b){b.classList.toggle("active",b.getAttribute("data-quick")===state.quick)});renderRegistry();
+    });
+    all("[data-scope]").forEach(function(button){button.addEventListener("click",function(){setScope(button.getAttribute("data-scope"))})});
+    all("[data-special]").forEach(function(button){button.addEventListener("click",function(){setSpecial(button.getAttribute("data-special"))})});
+    all("[data-quick]").forEach(function(button){button.addEventListener("click",function(){state.quick=button.getAttribute("data-quick");byId("statusFilter").value="";all("[data-quick]").forEach(function(b){b.classList.toggle("active",b===button)});renderRegistry()})});
+    ["search","typeFilter","yearFilter","statusFilter"].forEach(function(id){byId(id).addEventListener(id==="search"?"input":"change",function(){if(id==="statusFilter"&&byId(id).value){state.quick="";all("[data-quick]").forEach(function(b){b.classList.toggle("active",b.getAttribute("data-quick")==="")})}renderRegistry()})});
+    byId("sortFilter").addEventListener("change",function(){var parts=this.value.split("-");state.sortKey=parts[0];state.sortDir=parts[1]==="asc"?1:-1;renderRegistry()});
+    all("th[data-sort-key]").forEach(function(header){header.addEventListener("click",function(){var key=header.getAttribute("data-sort-key");if(state.sortKey===key)state.sortDir*=-1;else{state.sortKey=key;state.sortDir=["name","status","workType","date"].indexOf(key)>=0?1:-1}renderRegistry()})});
+    byId("csvBtn").addEventListener("click",exportCsv);
+    all("[data-progress-option]").forEach(function(button){button.addEventListener("click",function(){setProgressMode(button.getAttribute("data-progress-option"),true)})});
+    document.addEventListener("keydown",function(event){
+      if(event.key!=="Escape")return;
+      closeQualityDrawer();
+      closeFocusDrawer();
+      if(document.body.classList.contains("presentation-mode"))togglePresentation();
+    });
+  }
+
+  function exportCsv(){
+    if(!state.data)return;
+    var rows=filteredRows(),output=[["Проект","Статус","Направление","Контрагент","Договор","Дата","Стоимость G","Поступило L","Остаток Q"]];
+    rows.forEach(function(r){output.push([r.name,r.status||"",r.section,r.counterparty,r.contract,r.date||"",r.value,r.paid,r.balance==null?"":r.balance])});
+    var csv=output.map(function(row){return row.map(function(value){return '"'+String(value==null?"":value).replace(/"/g,'""')+'"'}).join(";")}).join("\n");
+    var blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="contracts_filtered.csv";a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},1000);
+  }
+
+  function bindSecret(){
+    var secret=["ArrowDown","ArrowDown","ArrowUp","ArrowUp"],progress=[];
+    document.addEventListener("keydown",function(event){
+      var tag=document.activeElement&&document.activeElement.tagName;if(tag==="INPUT"||tag==="TEXTAREA"||tag==="SELECT")return;
+      progress.push(event.key);if(progress.length>secret.length)progress.shift();
+      var matched=secret.every(function(key,index){return progress[index]===key});if(!matched)return;
+      var panel=byId("annualProgressContracting");
+      if(state.currentView==="results"&&state.progressMode==="contracting"&&panel){state.contractingFaceOn=!state.contractingFaceOn;panel.classList.toggle("easter-face-on",state.contractingFaceOn);event.preventDefault()}
+      progress=[];
+    });
+  }
+
+  function init(){
+    try{var stored=localStorage.getItem("annual-progress-mode");if(stored==="contracting")state.progressMode="contracting"}catch(e){}
+    initTheme();bindControls();bindSecret();populateStatuses();restoreFiltersFromLink();updateActiveFilterCount();refreshDashboard(true);
+    window.setInterval(function(){refreshDashboard(false)},REFRESH_INTERVAL_MS);
+    document.addEventListener("visibilitychange",function(){if(!document.hidden&&Date.now()-state.lastRequestAt>30000)refreshDashboard(false)});
+  }
+
+  window.addEventListener("load",init);
+})();
+</script>

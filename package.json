@@ -1,0 +1,9 @@
+{
+  "name": "commercial-contracts-dashboard",
+  "version": "39.0.0",
+  "private": true,
+  "description": "Executive dashboard for the commercial contracts portfolio",
+  "scripts": {
+    "test": "node validate.mjs"
+  }
+}

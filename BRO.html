@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="ru" data-theme="corporate">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <script>
+  window.__INITIAL_SLICE__=<?!= initialSliceJson ?>;
+  (function(){
+    try{
+      var saved=localStorage.getItem("commercial-dashboard-theme");
+      var allowed={dark:true,light:true,corporate:true};
+      var theme=allowed[saved]?saved:"corporate";
+      document.documentElement.setAttribute("data-theme",theme);
+      document.documentElement.style.colorScheme=theme==="dark"?"dark":"light";
+    }catch(e){
+      document.documentElement.setAttribute("data-theme","corporate");
+      document.documentElement.style.colorScheme="light";
+    }
+  })();
+  </script>
+  <?!= include('Assets'); ?>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><b>CONTRACT CONTROL · V39</b><span>executive dashboard</span></div>
+    <div class="nav">
+      <button class="active" data-view="pulse" type="button"><span>Pulse</span></button>
+      <button data-view="results" type="button"><span>Результаты</span></button>
+      <button data-view="contracts" type="button"><span>Договоры</span></button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-title"><b>Commercial Contracts</b> · <span id="viewTitle">Pulse</span></div>
+
+      <div class="topbar-online">
+        <span id="liveStatus" class="live-status">Подключение…</span>
+        <button id="refreshDashboard" class="live-refresh" type="button">Обновить</button>
+      </div>
+
+      <div class="service-actions" aria-label="Сервисные действия">
+        <button id="focusButton" class="service-button focus-button" type="button">
+          <span class="service-icon">◎</span><span>Управленческий фокус</span>
+        </button>
+        <button id="qualityButton" class="service-button quality-button" type="button">
+          <span class="service-icon">!</span><span>Контроль данных</span><b id="qualityButtonCount">—</b>
+        </button>
+        <button id="copyReportButton" class="service-button" type="button">
+          <span class="service-icon">⧉</span><span>Краткий отчёт</span>
+        </button>
+        <button id="printButton" class="service-button" type="button">
+          <span class="service-icon">▣</span><span>Печать / PDF</span>
+        </button>
+        <button id="presentationButton" class="service-button presentation-button" type="button" aria-pressed="false">
+          <span class="service-icon">↗</span><span id="presentationLabel">Режим доклада</span>
+        </button>
+      </div>
+
+      <div id="themePicker" class="theme-picker" role="group" aria-label="Цветовая тема">
+        <button class="theme-choice" type="button" data-theme-option="dark" aria-pressed="true" title="Тёмная тема">
+          <span class="theme-swatch swatch-dark" aria-hidden="true"></span><span>Тёмная</span>
+        </button>
+        <button class="theme-choice" type="button" data-theme-option="light" aria-pressed="false" title="Светлая тема">
+          <span class="theme-swatch swatch-light" aria-hidden="true"></span><span>Светлая</span>
+        </button>
+        <button class="theme-choice" type="button" data-theme-option="corporate" aria-pressed="false" title="Корпоративная тема">
+          <span class="theme-swatch swatch-corporate" aria-hidden="true"></span><span>Корпоративная</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+      <div id="dataError" class="data-error"></div>
+
+      <section class="view active" id="view-pulse">
+        <div class="hero">
+          <div class="eyebrow">Executive pulse · 2026</div>
+          <h1>Портфель, результат и динамика денег.</h1>
+          <p>Завершённые кварталы показывают фактические зелёные суммы. Для текущего 4 квартала отдельно отображаются факт и актуальный прогноз.</p>
+        </div>
+
+        <div class="control-ribbon">
+          <div class="control-ribbon-item">
+            <span>Источник</span><b id="sourceRibbon">Google Таблица · онлайн</b>
+          </div>
+          <div class="control-ribbon-item">
+            <span>Качество данных</span><b id="qualityRibbon">Проверяю…</b>
+          </div>
+          <div class="control-ribbon-item">
+            <span>Обновление</span><b id="freshnessRibbon">Подключение…</b>
+          </div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi overall-kpi">
+            <div class="kpi-label">Сводный KPI</div>
+            <div class="overall-top">
+              <div id="pulseOverallKpi" class="overall-number skeleton-text">—</div>
+              <div class="overall-note">выполнение<br>годовой цели</div>
+            </div>
+            <div class="contrib">
+              <div class="contrib-row">
+                <span>Приход · 80%</span>
+                <div class="contrib-track"><i id="pulseReceiptContributionBar" style="width:0;background:var(--acid)"></i></div>
+                <b id="pulseReceiptContribution">—</b>
+              </div>
+              <div class="contrib-row">
+                <span>Контрактация · 20%</span>
+                <div class="contrib-track"><i id="pulseContractContributionBar" style="width:0;background:var(--violet)"></i></div>
+                <b id="pulseContractContribution">—</b>
+              </div>
+            </div>
+            <div id="pulseFormula" class="formula-line">—</div>
+          </div>
+
+          <div class="kpi kpi-link" data-kpi-special="receipts2026" role="button" tabindex="0" title="Открыть договоры с фактическими поступлениями в 2026 году">
+            <div class="kpi-label">Приход 2026</div>
+            <div id="pulseReceiptsValue" class="kpi-value skeleton-text">—</div>
+            <div id="pulseReceiptsAttainment" class="kpi-sub" style="color:var(--green)">—</div>
+            <div class="kpi-open">Договоры с поступлениями →</div>
+          </div>
+
+          <div class="kpi kpi-link" data-kpi-special="contracting2026" role="button" tabindex="0" title="Открыть договоры, вошедшие в факт контрактации 2026">
+            <div class="kpi-label">Контрактация 2026</div>
+            <div id="pulseContractingValue" class="kpi-value skeleton-text">—</div>
+            <div id="pulseContractingAttainment" class="kpi-sub" style="color:var(--green)">—</div>
+            <div class="kpi-open">Договоры контрактации →</div>
+          </div>
+
+          <div class="kpi">
+            <div class="kpi-label">Подписанный портфель</div>
+            <div id="pulsePortfolioValue" class="kpi-value skeleton-text">—</div>
+            <div id="pulsePortfolioCount" class="kpi-sub">—</div>
+          </div>
+        </div>
+
+        <div class="pulse-grid">
+          <div class="card">
+            <div class="card-head">
+              <div><h2>Состояние портфеля</h2><p>Подписанные договоры + opportunities как будущая контрактация</p></div>
+              <span id="portfolioPositions" class="pill">—</span>
+            </div>
+            <div class="status-summary">
+              <div><span>В работе</span><b id="statusWorkCount">—</b><small id="statusWorkValue">—</small></div>
+              <div style="text-align:right"><span>Opportunities</span><b id="statusOppCount">—</b><small id="statusOppValue">—</small></div>
+            </div>
+            <div id="statusList" class="status-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><div><h2>Динамика поступлений</h2><p>1 кв. 2025 → 4 кв. 2026 · текущий квартал: факт + актуальный прогноз</p></div><span class="pill">млн ₽</span></div>
+            <div class="chart-wrap"><svg id="cashflowPulse" class="cashflow-svg" viewBox="0 0 760 300" role="img" aria-label="Динамика поступлений по кварталам"></svg></div>
+            <div class="legend"><span><i style="background:var(--acid)"></i>факт</span><span><i style="background:var(--blue);opacity:.6"></i>актуальный прогноз 4 кв.</span><span><i style="background:#fff;opacity:.55"></i>тренд с прогнозом 4 кв.</span></div>
+          </div>
+        </div>
+        <div id="pulseUpdatedAt" class="data-updated"></div>
+      </section>
+
+      <section class="view" id="view-results">
+        <div class="hero">
+          <div class="eyebrow">Annual results</div>
+          <h1>2025 и 2026 в одной логике.</h1>
+          <p>За 2025 и 2026 годы показаны общие результаты прихода и контрактации. Для 2026 дополнительно доступны квартальная динамика, прогноз и сводный KPI.</p>
+        </div>
+
+        <div class="summary-grid">
+          <div class="summary-card"><span>Приход 2025</span><b id="summaryReceipts2025">—</b><small id="summaryReceipts2025Meta">—</small></div>
+          <div class="summary-card"><span>Приход 2026</span><b id="summaryReceipts2026">—</b><small id="summaryReceipts2026Meta">—</small></div>
+          <div class="summary-card summary-history"><span>Контрактация 2025</span><b id="summaryContracting2025">—</b><small>итоговая сумма за год</small></div>
+          <div class="summary-card"><span>Контрактация 2026</span><b id="summaryContracting2026">—</b><small id="summaryContracting2026Meta">—</small></div>
+          <div class="summary-card"><span>Сводный KPI 2026</span><b id="summaryOverallKpi">—</b><small>80% приход · 20% контрактация</small></div>
+        </div>
+
+        <div class="results-grid">
+          <div class="card">
+            <div class="card-head"><div><h2>Динамика прихода 2025 → 2026</h2><p>Завершённые кварталы — факт; текущий 4 квартал — факт и прогноз</p></div></div>
+            <div class="chart-wrap"><svg id="cashflowResults" class="cashflow-svg" viewBox="0 0 760 300" role="img" aria-label="Динамика поступлений по кварталам"></svg></div>
+            <div class="legend"><span><i style="background:var(--acid)"></i>факт</span><span><i style="background:var(--blue);opacity:.6"></i>актуальный прогноз 4 кв.</span><span><i style="background:#fff;opacity:.55"></i>тренд с прогнозом 4 кв.</span></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><div><h2>KPI по кварталам 2026</h2><p>Процент выполнения + числовая база расчёта</p></div></div>
+            <div id="kpiMatrix" class="matrix"></div>
+          </div>
+        </div>
+
+        <div class="results-grid">
+          <div class="card">
+            <div class="card-head"><div><h2>Приход 2026</h2><p>Факт — только зелёные цифры</p></div><span id="resultsReceiptsAttainment" class="pill">—</span></div>
+            <div id="resultsReceiptsValue" class="kpi-value">—</div>
+            <div id="resultsReceiptsGoal" class="kpi-sub">—</div>
+            <div id="receiptsCompare" class="compare-wrap"></div>
+            <div class="compare-legend"><span><i style="background:#697484;opacity:.65"></i>план</span><span><i style="background:var(--acid)"></i>факт</span></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><div><h2>Контрактация 2026</h2><p>План / факт по кварталам</p></div><span id="resultsContractingAttainment" class="pill">—</span></div>
+            <div id="resultsContractingValue" class="kpi-value">—</div>
+            <div id="resultsContractingGoal" class="kpi-sub">—</div>
+            <div id="contractingCompare" class="compare-wrap"></div>
+            <div class="compare-legend"><span><i style="background:#697484;opacity:.65"></i>план</span><span><i style="background:var(--violet)"></i>факт</span></div>
+          </div>
+        </div>
+
+        <div class="card annual-progress-card">
+          <div class="annual-progress-header">
+            <div><h2>Общий прогресс годового плана</h2><p>Накопительно: результат по кварталам и линия годового плана.</p></div>
+            <div class="annual-progress-actions">
+              <div class="annual-progress-toggle" role="group" aria-label="Показатель накопительного графика">
+                <button class="active" type="button" data-progress-option="receipts" aria-pressed="true">Приход</button>
+                <button type="button" data-progress-option="contracting" aria-pressed="false">Контрактация</button>
+              </div>
+              <span class="pill">2026 · млн ₽</span>
+            </div>
+          </div>
+          <div id="annualProgressStage" class="annual-progress-stage"></div>
+        </div>
+        <div id="resultsUpdatedAt" class="data-updated"></div>
+      </section>
+
+      <section class="view" id="view-contracts">
+        <div class="hero">
+          <div class="eyebrow">Contract registry</div>
+          <h1>Договоры и статусы.</h1>
+          <p>На телефоне реестр показывается карточками, на компьютере — таблицей. Данные обновляются из рабочей Google Таблицы.</p>
+        </div>
+
+        <div class="contract-toolbar">
+          <div class="scope-row">
+            <button id="scopeSigned" class="active" data-scope="signed" type="button">Подписанные · —</button>
+            <button id="scopePipeline" data-scope="pipeline" type="button">Opportunities · —</button>
+            <button id="scopeSubsidy" data-scope="subsidy" type="button">Субсидии · —</button>
+            <button id="specialReceipts" class="scope-special" data-special="receipts2026" type="button">Приход 2026 · —</button>
+            <button id="specialContracting" class="scope-special" data-special="contracting2026" type="button">Контрактация 2026 · —</button>
+          </div>
+
+          <div class="quick-row">
+            <button class="active" data-quick="" type="button">Все</button>
+            <button data-quick="Действует" type="button">В работе</button>
+            <button data-quick="Ожидание ИД" type="button">Ожидание ИД</button>
+            <button data-quick="Процесс закрытия" type="button">Процесс закрытия</button>
+            <button data-quick="Выполнен и закрыт" type="button">Выполнен и закрыт</button>
+            <button data-quick="group:terminated" type="button">Расторгнут</button>
+            <button data-quick="Приостановлен" type="button">Приостановлен</button>
+          </div>
+
+          <div class="filter-row">
+            <input id="search" placeholder="Проект, договор, контрагент…">
+            <select id="typeFilter"><option value="">Все типы работ</option><option value="ТС">ТС</option><option value="ПОДД">ПОДД</option><option value="Прочее">Прочее</option></select>
+            <select id="yearFilter"><option value="">Все годы</option><option value="2024">2024</option><option value="2025">2025</option><option value="2026">2026</option></select>
+            <select id="statusFilter"><option value="">Все статусы</option></select>
+            <select id="sortFilter">
+              <option value="balance-desc">Остаток Q ↓</option>
+              <option value="received2026-desc">Приход 2026 ↓</option>
+              <option value="contracting2026-desc">Контрактация 2026 ↓</option>
+              <option value="workType-asc">Тип работ А–Я</option>
+              <option value="value-desc">Стоимость G ↓</option>
+              <option value="status-asc">Статус А–Я</option>
+              <option value="name-asc">Проект А–Я</option>
+            </select>
+            <span id="activeFilterCount" class="active-filter-count">Активных фильтров: 0</span>
+            <button id="copySliceButton" class="secondary-action" type="button">Скопировать срез</button>
+            <button id="copyFilterLinkButton" class="secondary-action" type="button">Ссылка на срез</button>
+            <button id="resetFiltersButton" class="secondary-action reset-action" type="button">Сбросить фильтры</button>
+            <button id="csvBtn" type="button">CSV</button>
+          </div>
+        </div>
+
+        <div id="specialContext" class="special-context"></div>
+        <div class="registry-summary">
+          <div class="registry-stat"><span>Позиций</span><b id="regCount">—</b></div>
+          <div class="registry-stat"><span>Стоимость G</span><b id="regValue">—</b></div>
+          <div class="registry-stat"><span>Остаток Q</span><b id="regBalance">—</b></div>
+        </div>
+
+        <div id="detailPanel" class="detail-panel"></div>
+        <div class="registry-table-wrap">
+          <table>
+            <thead><tr>
+              <th data-sort-key="name">Проект</th><th data-sort-key="status">Статус</th><th data-sort-key="workType">Тип работ</th>
+              <th data-sort-key="date">Дата</th><th class="money" data-sort-key="value">Стоимость G</th>
+              <th class="money" data-sort-key="paid">Поступило L</th><th class="money" data-sort-key="balance">Остаток Q</th>
+            </tr></thead>
+            <tbody id="registryBody"><tr><td class="empty" colspan="7">Загрузка данных…</td></tr></tbody>
+          </table>
+        </div>
+        <div id="registryCards" class="registry-cards"><div class="empty">Загрузка данных…</div></div>
+        <div id="contractsUpdatedAt" class="data-updated"></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="mobile-nav">
+  <button class="active" data-view="pulse" type="button">Pulse</button>
+  <button data-view="results" type="button">Результаты</button>
+  <button data-view="contracts" type="button">Договоры</button>
+</div>
+
+<div id="qualityOverlay" class="quality-overlay" aria-hidden="true"></div>
+<aside id="qualityDrawer" class="quality-drawer" aria-hidden="true" aria-label="Контроль качества данных">
+  <div class="quality-drawer-head">
+    <div>
+      <span class="quality-kicker">Data quality</span>
+      <h2>Контроль качества данных</h2>
+      <p>Автоматические проверки рабочей таблицы.</p>
+    </div>
+    <button id="qualityCloseButton" class="drawer-close" type="button" aria-label="Закрыть">×</button>
+  </div>
+  <div class="quality-summary">
+    <div><span>Требует исправления</span><b id="qualityCriticalCount">—</b></div>
+    <div><span>Нужно проверить</span><b id="qualityReviewCount">—</b></div>
+    <div><span>Всего замечаний</span><b id="qualityTotalCount">—</b></div>
+  </div>
+  <div id="qualityList" class="quality-list">
+    <div class="empty">Загрузка проверок…</div>
+  </div>
+  <div class="quality-drawer-foot">
+    <button id="copyQualityButton" class="service-button primary-action" type="button">Скопировать список</button>
+    <small>Замечания формируются автоматически при каждом обновлении данных.</small>
+  </div>
+</aside>
+
+<div id="focusOverlay" class="focus-overlay" aria-hidden="true"></div>
+<aside id="focusDrawer" class="focus-drawer" aria-hidden="true" aria-label="Управленческий фокус">
+  <div class="focus-drawer-head">
+    <div>
+      <span class="quality-kicker">Management focus</span>
+      <h2>Управленческий фокус</h2>
+      <p>Короткий срез для совещания: годовой сценарий, процесс и крупнейшие остатки.</p>
+    </div>
+    <button id="focusCloseButton" class="drawer-close" type="button" aria-label="Закрыть">×</button>
+  </div>
+  <div class="focus-summary">
+    <div class="focus-metric">
+      <span>Сценарий прихода 2026</span>
+      <b id="focusReceiptsScenario">—</b>
+      <small id="focusReceiptsMeta">—</small>
+    </div>
+    <div class="focus-metric">
+      <span>Контрактация 2026</span>
+      <b id="focusContracting">—</b>
+      <small id="focusContractingMeta">—</small>
+    </div>
+    <div class="focus-metric">
+      <span>Opportunities</span>
+      <b id="focusPipeline">—</b>
+      <small id="focusPipelineMeta">—</small>
+    </div>
+  </div>
+  <section class="focus-section">
+    <div class="focus-section-head"><h3>Крупнейшие остатки</h3><span>активные договоры</span></div>
+    <div id="focusBalances" class="focus-balances"><div class="empty">Загрузка данных…</div></div>
+  </section>
+  <section class="focus-section focus-health">
+    <div><span>Договоры в работе</span><b id="focusActiveCount">—</b></div>
+    <div><span>На закрытии</span><b id="focusClosingCount">—</b></div>
+    <div><span>Критичные замечания</span><b id="focusCriticalCount">—</b></div>
+  </section>
+  <div class="focus-drawer-foot">
+    <button id="copyFocusButton" class="service-button primary-action" type="button">Скопировать управленческий срез</button>
+  </div>
+</aside>
+<div id="conceptToast" class="concept-toast" role="status" aria-live="polite"></div>
+
+<?!= include('Client'); ?>
+</body>
+</html>
